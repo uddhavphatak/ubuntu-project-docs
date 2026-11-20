@@ -213,13 +213,25 @@ In this case, the following file changes are separated into logical units:
 (merge-split-into-logical-commits)=
 ### Split into logical commits
 
-Start a rebase at `old/debian`, and then reset to `HEAD^` to bring back the changes as uncommitted changes.
+Use an interactive rebase to stop at each commit that you want to split. At each stop, undo the commit while keeping its changes, and then commit the changes again as one commit per logical unit.
 
-1. Start a rebase: `git rebase -i old/debian`
-1. Change the commit(s) you're going to separate from `pick` to `edit`
-1. Do a `git reset` to get your changes back: `git reset HEAD^`
+1. Start an interactive rebase from `old/debian`:
 
-Next, add the commits:
+   ```none
+   $ git rebase -i old/debian
+   ```
+
+1. In the editor, change `pick` to `edit` for each commit you want to split, then save and close the file. Git applies the commits in order and stops after each commit marked `edit`.
+
+1. Undo the commit at which the rebase stopped, keeping its changes in the working tree:
+
+   ```none
+   $ git reset HEAD^
+   ```
+
+   The changes from the commit are now unstaged, and any files that the commit added are untracked. Run `git status` to list them.
+
+Next, stage and commit each logical unit separately. Use `git add <file>` to stage whole files. If a file contains changes that belong to different logical units, use `git add -p <file>` to stage only the hunks of the current unit, and leave the rest of the file for a later commit.
 
 Each commit message follows the changelog entry format: the `*` prefix denotes a bullet point, and continuation lines are indented to align with it. The entire block constitutes the commit message (there is no separate subject/body split). See {ref}`how-to-commit-changes` for more information about commit message standards.
 
@@ -262,6 +274,8 @@ Maintainers:
 $ git commit -m "update maintainers" debian/control
 ```
 
+`git commit <file>` commits all remaining changes in that file, even the ones you haven't staged. If {file}`debian/control` contains other changes as well, commit them first with `git add -p debian/control`, so that this commit contains only the maintainer update. When you {ref}`prepare the logical view <merge-prepare-the-logical-view>`, you delete this commit, so any other change in it would be lost.
+
 ------------------------------------------------------------------------------
 
 Changelog:
@@ -272,15 +286,21 @@ $ git commit -m changelog debian/changelog
 
 ------------------------------------------------------------------------------
 
-Finally, complete the rebase:
+Before you continue, check that `git status` reports `nothing to commit, working tree clean`. Then continue the rebase:
 
 ```none
 $ git rebase --continue
 ```
 
+If you marked more than one commit as `edit`, the rebase stops at the next one. Repeat the reset, stage, and commit steps for each of them. To cancel the rebase and return to the state before it started, run `git rebase --abort`.
+
 The result of this rebase should be a sequence of smaller commits, one per `debian/changelog` entry (with potentially additional commits for previously undocumented changes).
 
-It should represent a granular history (viewable with `git log`) for the latest Ubuntu version and no content differences to that Ubuntu version. This can be verified with `git diff -p old/ubuntu`.
+It should represent a granular history (viewable with `git log`) for the latest Ubuntu version and no content differences to that Ubuntu version. To verify this, check that the following command prints nothing:
+
+```none
+$ git diff old/ubuntu
+```
 
 
 (merge-tag-split)=
@@ -455,9 +475,13 @@ If all the commits are empty, or you realized there are no logical changes, you'
 (merge-check-patches-still-apply-cleanly)=
 ### Check patches still apply cleanly
 
+Apply all patches listed in {file}`debian/patches/series`:
+
 ```none
 $ quilt push -a --fuzz=0
 ```
+
+With `--fuzz=0`, {command}`quilt` applies the patches the same way {command}`dpkg-source` does when it builds or unpacks the source package: the context lines around each change must match the code exactly. A hunk that applies at a different line number is fine, for example `Hunk #1 succeeded at 4 (offset 1 line).` When all patches apply, the output ends with `Now at patch <last-patch>`.
 
 **If {command}`quilt` fails to find the patches**
 
@@ -466,7 +490,7 @@ file to make the changes permanent.)
 
 **If {command}`quilt` fails to apply the patches**
 
-Quilt can fail at this point if the file being patched has changed significantly upstream. The most common reason is that the issue the patch addresses has since been fixed upstream.
+Quilt fails at this point if the lines that a patch changes, or the context lines around them, changed in the new version. The most common reason is that the issue the patch addresses has since been fixed upstream.
 
 For example:
 
@@ -480,6 +504,11 @@ Hunk #1 FAILED at 297.
 Patch ssh-ignore-disconnected.patch does not apply (enforce with -f)
 ```
 
+{command}`quilt` stops at the first patch that fails. The patches before it stay applied, and the failed patch isn't applied at all. To decide what to do with the failed patch, compare it with the new code, and check the upstream and Debian changelogs:
+
+* If the new version already contains the change, remove the patch, as described in the following example. If the new version contains exactly the same change, {command}`quilt` prints `Patch <patch> can be reverse-applied` instead of `does not apply`.
+* If the change is still needed, {ref}`resolve the rejected hunks <merge-resolve-rejected-hunks>`.
+
 If this patch fails because the changes in `ssh-ignore-disconnected.patch` are already applied upstream, you must remove this patch.
 
 ```none
@@ -491,16 +520,127 @@ $ git log --oneline
 
 Removing `1aed93f` removes the patch.
 
-1. Save the commit message from `1aed93f` for later including it in the `Drop Changes` section of the new changelog entry.
+1. Save the commit message from `1aed93f` for later including it in the {ref}`Drop Changes <merge-add-dropped-changes>` section of the new changelog entry.
+1. Unapply the patches that are still applied. Git refuses to start a rebase while the patched files are modified.
+
+   ```none
+   $ quilt pop -a
+   ```
+
 1. `git rebase -i 7d9d752` and delete commit `1aed93f`.
+1. Run `quilt push -a --fuzz=0` again to check the remaining patches.
+
+
+(merge-resolve-rejected-hunks)=
+### Resolve rejected hunks
+
+If the change in a failed patch is still needed, update the patch so that it applies to the new version. In the following example, the Ubuntu patch `use-run-dir.patch` changes the default PID file path in {file}`src/main.c`, and the new upstream version changed a line next to one of those changes.
+
+1. Apply the failed patch with the `-f` (force) option:
+
+   ```none
+   $ quilt push -f --fuzz=0
+   ```
+
+   {command}`quilt` applies the hunks that match, and saves the hunks that don't to a reject file. The reject file has the name of the patched file with a {file}`.rej` extension:
+
+   ```none
+   Applying patch use-run-dir.patch
+   patching file src/main.c
+   Hunk #1 succeeded at 4 (offset 1 line).
+   Hunk #2 FAILED at 14.
+   1 out of 2 hunks FAILED -- saving rejects to file src/main.c.rej
+   Applied patch use-run-dir.patch (forced; needs refresh)
+   ```
+
+1. Open the reject file, in this example {file}`src/main.c.rej`. It shows each rejected hunk in diff format. Lines starting with `-` are the lines that the patch expected to find and replace, lines starting with `+` are their replacement, and lines starting with a space are context that must match without changes:
+
+   ```diff
+   --- src/main.c
+   +++ src/main.c
+   @@ -14,7 +14,7 @@
+        printf("Options:\n");
+        printf("  -c FILE   configuration file (default: %s)\n", CONF_FILE);
+        printf("  -l FILE   log file (default: %s)\n", LOG_FILE);
+   -    printf("  -p FILE   PID file (default: /var/run/foo.pid)\n");
+   +    printf("  -p FILE   PID file (default: /run/foo.pid)\n");
+        printf("  -v        verbose output\n");
+        printf("  -h        show this help\n");
+    }
+   ```
+
+1. Find the same place in the patched file, and compare it with the hunk to see what changed. Here, the new version rewrote the help text of the `-l` option, so the context no longer matches:
+
+   ```none
+       printf("  -l FILE   write the log to FILE (default: %s)\n", LOG_FILE);
+       printf("  -p FILE   PID file (default: /var/run/foo.pid)\n");
+   ```
+
+1. Make the rejected change by hand, adapting it to the new code where needed. Here, change `/var/run/foo.pid` to `/run/foo.pid` on the `-p` line. To change a file that the patch doesn't change yet, run `quilt add <file>` before you edit it; see {ref}`edit-a-patch-file`.
+
+1. Check the complete patch, and then save your changes to the patch file:
+
+   ```none
+   $ quilt diff
+   $ quilt refresh
+   ```
+
+   Use the {ref}`recommended Quilt configuration <quilt>`, so that the refreshed patch doesn't contain timestamps and index lines. Until you refresh the patch, {command}`quilt` refuses to unapply it, with the error `Patch use-run-dir.patch needs to be refreshed first.`
+
+1. Delete the reject file, which {command}`quilt` doesn't remove:
+
+   ```none
+   $ rm src/main.c.rej
+   ```
+
+1. Continue applying the remaining patches:
+
+   ```none
+   $ quilt push -a --fuzz=0
+   ```
+
+   Repeat these steps for each patch that fails. If the patch you fixed is the last one in the series, {command}`quilt` reports `File series fully applied, ends at patch <patch>`.
 
 
 (merge-unapply-patches-before-continuing)=
 ### Unapply patches before continuing
 
+When all patches apply, unapply them, and remove the {file}`.pc` directory in which {command}`quilt` tracks applied patches:
+
 ```none
 $ quilt pop -a
+$ rm -rf .pc
 ```
+
+`git ubuntu merge finish` refuses to run if the working tree contains changes or untracked files, including a leftover {file}`.pc` directory.
+
+If you refreshed any patches, `git status` now lists them as modified. Add each refreshed patch to the commit that introduced the patch, so that the change stays a single logical unit:
+
+1. Find the commit that adds or changes the patch:
+
+   ```none
+   $ git log --oneline new/debian.. -- debian/patches/<patch>
+   ```
+
+1. Commit the refreshed patch:
+
+   ```none
+   $ git commit -m "Refresh <patch>" debian/patches/<patch>
+   ```
+
+1. Start an interactive rebase from `new/debian`:
+
+   ```none
+   $ git rebase -i new/debian
+   ```
+
+   Move the line of the new commit underneath the commit you found in the first step, and change it from `pick` to `fixup`.
+
+:::{note}
+Don't use `git commit --fixup` with `git rebase --autosquash` here. Autosquash doesn't recognize the target commit when its message starts with spaces, like the changelog-style messages in this guide, so the fixup commit stays a separate commit.
+:::
+
+If `git log` lists no commit, the patch comes from Debian, and refreshing it adds a new change to the Ubuntu delta; see {ref}`merge-adding-new-changes`.
 
 
 (merge-adding-new-changes)=

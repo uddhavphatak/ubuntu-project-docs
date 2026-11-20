@@ -28,6 +28,20 @@ Extra:
 ::::
 
 
+(merge-before-you-start)=
+## Before you start
+
+Complete {ref}`how-to-set-up-for-ubuntu-development` first. The commands in
+this series use the source package name, which can differ from the names of
+the binary packages you install and test.
+
+This workflow merges Debian unstable into the Ubuntu development release.
+Choose the target Ubuntu series and pocket explicitly; the historical
+versions and release names in the examples are not current recommendations.
+For an already released Ubuntu series, follow the
+{ref}`stable-release-updates` process instead.
+
+
 (merge-decide-on-a-merge-candidate)=
 ## Decide on a merge candidate
 
@@ -58,18 +72,32 @@ at         | 3.1.23-1        | unstable           | source, amd64, arm64, armel,
 at         | 3.1.23-1        | unstable-debug     | source
 ```
 
-You're be merging from Debian `unstable`, which in this example is `3.1.23-1`.
+In this example, the candidate from Debian `unstable` is `3.1.23-1`.
+Record the current Ubuntu source version, the desired Debian source version
+and suite, and the target Ubuntu series and pocket before continuing.
+
+A merge is normally needed when the Ubuntu package carries Ubuntu-specific
+changes, the {term}`Ubuntu delta`, that are still required in Ubuntu but are
+not part of the Debian package. The merge carries those changes forward onto
+the new Debian version.
+
+If Debian already includes every required Ubuntu change, consider a
+{ref}`sync request <how-to-request-a-sync>` instead of a merge. Check the
+actual changes, not just the version strings.
 
 
 (merge-check-existing-bug-entries)=
 ## Check existing bug entries
 
-Check for any low-hanging fruit in the Debian or Ubuntu bug list that can be wrapped into this merge.
+Check the Debian and Ubuntu bug lists for existing merge work and issues
+that affect the merge.
 
 * Ubuntu bug tracker: `https://bugs.launchpad.net/ubuntu/+source/<package>`
 * Debian bug tracker: `https://tracker.debian.org/pkg/<package>`
 
-If there are bugs you'd like to fix, make a new SRU-style commit at the end of the merge process and put them together in the same merge proposal. This process is described in the {ref}`merge-adding-new-changes` section.
+Agree on any additional fixes with your reviewer and keep unrelated fixes
+separate. Changes needed for the merge belong in their own logical commits,
+as described in {ref}`merge-adding-new-changes`.
 
 
 (merge-make-a-bug-report-for-the-merge)=
